@@ -27,7 +27,7 @@ export default function HomePage() {
   // You can also provide a custom RPC endpoint.
   const endpoint = useMemo(
     () =>
-      "https://fluent-capable-pine.solana-mainnet.quiknode.pro/cf8418326e14b4fdf699af6fbb89e139408f7f84/",
+      "https://solana-mainnet.g.alchemy.com/v2/6e49viiueAByo0eEr2h2ZF8TgnQbqcxf",
     [network]
   );
 

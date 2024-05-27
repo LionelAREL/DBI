@@ -1,20 +1,35 @@
 import {
-  Liquidity,
-  LiquidityPoolKeys,
-  jsonInfo2PoolKeys,
-  LiquidityPoolJsonInfo,
+  ApiClmmPoolsItemStatistics,
   TokenAccount,
-  Token,
-  TokenAmount,
-  TOKEN_PROGRAM_ID,
-  Percent,
   SPL_ACCOUNT_LAYOUT,
-  LIQUIDITY_STATE_LAYOUT_V4,
-  MARKET_STATE_LAYOUT_V3,
-  Market,
   PoolInfoLayout,
+  ClmmPoolInfo,
+  findProgramAddress,
+  Clmm,
+  ApiClmmPoolsItem,
+  AccountInfo,
+  ApiClmmConfigItem,
+  AmmConfigLayout,
+  TokenAmount,
+  Percent,
+  Token,
+  fetchMultipleMintInfos,
+  InnerSimpleV0Transaction,
+  buildSimpleTransaction,
+  TxVersion,
 } from "@raydium-io/raydium-sdk";
+
+import {
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+  getMint,
+} from "@solana/spl-token";
+
+import { SendOptions, Signer } from "@solana/web3.js";
+
 import BN from "bn.js";
+import { Decimal } from "decimal.js";
+
 import {
   Connection,
   PublicKey,
@@ -25,9 +40,420 @@ import {
   GetProgramAccountsResponse,
 } from "@solana/web3.js";
 
-import { AccountLayout } from "@solana/spl-token";
+async function getMintProgram(connection: Connection, mint: PublicKey) {
+  const account = await connection.getAccountInfo(mint);
+  if (account === null) throw Error(" get id info error ");
+  return account.owner;
+}
 
-const RAYDIUM_V4_PROGRAM_ID = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+export function formatConfigInfo(
+  id: PublicKey,
+  account: AccountInfo<Buffer>
+): ApiClmmConfigItem {
+  const info = AmmConfigLayout.decode(account.data);
+
+  return {
+    id: id.toBase58(),
+    index: info.index,
+    protocolFeeRate: info.protocolFeeRate,
+    tradeFeeRate: info.tradeFeeRate,
+    tickSpacing: info.tickSpacing,
+    fundFeeRate: info.fundFeeRate,
+    fundOwner: info.fundOwner.toString(),
+    description: "",
+  };
+}
+
+export function getApiClmmPoolsItemStatisticsDefault(): ApiClmmPoolsItemStatistics {
+  return {
+    volume: 0,
+    volumeFee: 0,
+    feeA: 0,
+    feeB: 0,
+    feeApr: 0,
+    rewardApr: { A: 0, B: 0, C: 0 },
+    apr: 0,
+    priceMin: 0,
+    priceMax: 0,
+  };
+}
+
+async function getConfigInfo(
+  connection: Connection,
+  configId: PublicKey
+): Promise<ApiClmmConfigItem> {
+  const account = await connection.getAccountInfo(configId);
+  if (account === null) throw Error(" get id info error ");
+  return formatConfigInfo(configId, account);
+}
+
+export async function formatClmmKeysById(
+  connection: Connection,
+  id: string
+): Promise<ApiClmmPoolsItem> {
+  const account = await connection.getAccountInfo(new PublicKey(id));
+  if (account === null) throw Error(" get id info error ");
+  const info = PoolInfoLayout.decode(account.data);
+
+  return {
+    id,
+    mintProgramIdA: (await getMintProgram(connection, info.mintA)).toString(),
+    mintProgramIdB: (await getMintProgram(connection, info.mintB)).toString(),
+    mintA: info.mintA.toString(),
+    mintB: info.mintB.toString(),
+    vaultA: info.vaultA.toString(),
+    vaultB: info.vaultB.toString(),
+    mintDecimalsA: info.mintDecimalsA,
+    mintDecimalsB: info.mintDecimalsB,
+    ammConfig: await getConfigInfo(connection, info.ammConfig),
+    rewardInfos: await Promise.all(
+      info.rewardInfos
+        .filter((i: any) => !i.tokenMint.equals(PublicKey.default))
+        .map(async (i: any) => ({
+          mint: i.tokenMint.toString(),
+          programId: (await getMintProgram(connection, i.tokenMint)).toString(),
+        }))
+    ),
+    tvl: 0,
+    day: getApiClmmPoolsItemStatisticsDefault(),
+    week: getApiClmmPoolsItemStatisticsDefault(),
+    month: getApiClmmPoolsItemStatisticsDefault(),
+    lookupTableAccount: PublicKey.default.toBase58(),
+  };
+}
+const POOL_ID = "VUx83xFX3LhmrhbFWxAtTdAuQKuEJk1r2qq1edj7d6p";
+
+export function estimateOutputAmount(
+  inputTokenAmount: number,
+  poolInfo: ClmmPoolInfo,
+  isBuying: boolean
+): number {
+  let outputAmount;
+  if (isBuying) {
+    outputAmount = poolInfo.currentPrice.toNumber() * inputTokenAmount;
+  } else {
+    outputAmount = inputTokenAmount / poolInfo.currentPrice.toNumber();
+  }
+  return outputAmount;
+}
+
+export async function fetchPoolInfo(
+  connection: Connection,
+  owner: PublicKey
+): Promise<ClmmPoolInfo> {
+  const clmmPools: ApiClmmPoolsItem[] = [
+    await formatClmmKeysById(connection, POOL_ID),
+  ];
+  const { [POOL_ID]: poolInfo } = await Clmm.fetchMultiplePoolInfos({
+    connection,
+    poolKeys: clmmPools,
+    chainTime: new Date().getTime() / 1000,
+  });
+
+  if (!poolInfo) {
+    throw new Error("Failed to fetch pool info");
+  }
+  // const programId = new PublicKey(TOKEN_PROGRAM_ID);
+  // // Deserialize pool info (implement the deserialization based on the pool structure)
+  // const poolKeys = deserializePoolInfo(accountInfo.data);
+  // poolKeys.id = poolId;
+  // poolKeys.mintProgramIdA = programId;
+  // poolKeys.mintProgramIdB = programId;
+  // poolKeys.ammConfig = { id: poolKeys.ammConfig };
+
+  // const tokenAccountsResponse = await connection.getParsedTokenAccountsByOwner(
+  //   owner,
+  //   {
+  //     programId: TOKEN_PROGRAM_ID,
+  //   }
+  // );
+  // console.log(tokenAccountsResponse);
+  // const tokenAccounts: TokenAccount[] = tokenAccountsResponse.value.map(
+  //   (accountInfo) => ({
+  //     pubkey: accountInfo.pubkey,
+  //     account: accountInfo.account.data.parsed.info,
+  //     amount: accountInfo.account.data.parsed.info.tokenAmount.amount,
+  //     mint: new PublicKey(accountInfo.account.data.parsed.info.mint),
+  //     accountInfo: {
+  //       mint: new PublicKey(accountInfo.account.data.parsed.info.mint),
+  //     },
+  //   })
+  // );
+
+  // console.log(tokenAccounts);
+  // const slot = await connection.getSlot();
+  // const blockTime = await connection.getBlockTime(slot);
+
+  // if (blockTime === null) {
+  //   throw new Error("Unable to fetch block time");
+  // }
+
+  // const chainTime = blockTime * 1000; // Convert to milliseconds
+
+  // const infos = {
+  //   connection,
+  //   poolKeys: [poolKeys],
+  //   // ownerInfo: { wallet: owner, tokenAccounts: tokenAccounts },
+  //   chainTime,
+  // };
+  // console.log("infos", infos);
+  // const poolInfo = await Clmm.fetchMultiplePoolInfos(infos);
+  // console.log("poolInfo", poolInfo);
+  // return poolInfo[POOL_ID].state;
+  return poolInfo.state;
+}
+
+async function getWalletTokenAccount(
+  connection: Connection,
+  wallet: PublicKey
+): Promise<TokenAccount[]> {
+  const walletTokenAccount = await connection.getTokenAccountsByOwner(wallet, {
+    programId: TOKEN_PROGRAM_ID,
+  });
+  return walletTokenAccount.value.map((i) => ({
+    pubkey: i.pubkey,
+    programId: i.account.owner,
+    accountInfo: SPL_ACCOUNT_LAYOUT.decode(i.account.data),
+  }));
+}
+
+function convertFromSmallestUnit(amountInSmallestUnit: any, decimals: any) {
+  // Ensure amountInSmallestUnit is an instance of BN
+  if (!BN.isBN(amountInSmallestUnit)) {
+    throw new Error("amountInSmallestUnit must be an instance of BN");
+  }
+
+  // Convert to string and perform division to get the floating-point representation
+  const factor = new BN(10).pow(new BN(decimals));
+  const amountInToken =
+    amountInSmallestUnit.div(factor).toNumber() +
+    amountInSmallestUnit.mod(factor).toNumber() / Math.pow(10, decimals);
+
+  return amountInToken;
+}
+
+export async function sendTx(
+  connection: Connection,
+  payer: Keypair | Signer,
+  txs: (VersionedTransaction | Transaction)[],
+  options?: SendOptions
+): Promise<string[]> {
+  const txids: string[] = [];
+  for (const iTx of txs) {
+    if (iTx instanceof VersionedTransaction) {
+      iTx.sign([payer]);
+      txids.push(await connection.sendTransaction(iTx, options));
+    } else {
+      txids.push(await connection.sendTransaction(iTx, [payer], options));
+    }
+  }
+  return txids;
+}
+
+export async function buildAndSendTx(
+  connection: Connection,
+  owner: PublicKey,
+  innerSimpleV0Transaction: InnerSimpleV0Transaction[]
+) {
+  const willSendTx = await buildSimpleTransaction({
+    makeTxVersion: TxVersion.V0,
+    payer: owner,
+    connection,
+    innerTransactions: innerSimpleV0Transaction,
+    addLookupTableInfo: undefined,
+  });
+
+  return willSendTx;
+}
+
+export async function createSwap(
+  connection: Connection,
+  poolInfo: ClmmPoolInfo,
+  owner: PublicKey,
+  tokenA: string,
+  tokenB: string,
+  amountIn: number,
+  amountOut: number,
+  useVersionedTransaction: boolean = true
+) {
+  const clmmPools: ApiClmmPoolsItem[] = [
+    await formatClmmKeysById(connection, POOL_ID),
+  ];
+  const mintInfoInput = await getMint(connection, new PublicKey(tokenA));
+  const mintInfoOutput = await getMint(connection, new PublicKey(tokenA));
+  const inputToken = new Token(
+    TOKEN_PROGRAM_ID,
+    new PublicKey(tokenA),
+    mintInfoInput.decimals
+  );
+  const outputToken = new Token(
+    TOKEN_PROGRAM_ID,
+    new PublicKey(tokenB),
+    mintInfoOutput.decimals
+  );
+  const inputTokenAmount = new TokenAmount(
+    inputToken,
+    new BN(amountIn * Math.pow(10, mintInfoInput.decimals)).toString()
+  );
+  console.log(inputToken, inputTokenAmount.raw.toString());
+  const tickCache = await Clmm.fetchMultiplePoolTickArrays({
+    connection,
+    poolKeys: [poolInfo],
+    batchRequest: true,
+  });
+  // const amountInTest = inputTokenAmount;
+  const { minAmountOut, remainingAccounts } = Clmm.computeAmountOutFormat({
+    poolInfo: poolInfo,
+    tickArrayCache: tickCache[POOL_ID],
+    amountIn: inputTokenAmount,
+    currencyOut: outputToken,
+    slippage: new Percent(1, 100),
+    epochInfo: await connection.getEpochInfo(),
+    token2022Infos: await fetchMultipleMintInfos({
+      connection,
+      mints: [
+        ...clmmPools
+          .map((i: any) => [
+            { mint: i.mintA, program: i.mintProgramIdA },
+            { mint: i.mintB, program: i.mintProgramIdB },
+          ])
+          .flat()
+          .filter((i: any) => i.program === TOKEN_2022_PROGRAM_ID.toString())
+          .map((i: any) => new PublicKey(i.mint)),
+      ],
+    }),
+    catchLiquidityInsufficient: false,
+  });
+  console.log("minAmountOut", minAmountOut.amount.raw.toString());
+  console.log("remainingAccounts", remainingAccounts);
+
+  // const tokenAccountsResponse = await connection.getParsedTokenAccountsByOwner(
+  //   owner,
+  //   {
+  //     programId: TOKEN_PROGRAM_ID,
+  //   }
+  // );
+  // const tokenAccounts: TokenAccount[] = tokenAccountsResponse.value.map(
+  //   (accountInfo) => ({
+  //     pubkey: accountInfo.pubkey,
+  //     programId: new PublicKey(TOKEN_PROGRAM_ID),
+  //     accountInfo: {
+  //       mint: new PublicKey(accountInfo.account.data.parsed.info.mint),
+  //       owner: new PublicKey(accountInfo.account.data.parsed.info.owner),
+  //     },
+  //   })
+  // );
+
+  // const params = {
+  //   connection,
+  //   poolInfo,
+  //   ownerInfo: {
+  //     feePayer: ownerPublicKey,
+  //     wallet: ownerPublicKey,
+  //     tokenAccounts: tokenAccounts,
+  //   },
+  //   inputMint: inputToken,
+  //   amountIn: new BN(amountIn).raw,
+  //   amountOutMin: new BN(amountOut).raw,
+  //   remainingAccounts: tokenAccounts,
+  //   // associatedOnly: true,
+  // checkCreateATAOwner: false,
+  // config: {
+  //   bypassAssociatedCheck: false,
+  // },
+  // computeBudgetConfig: {
+  //   microLamports: 100000,
+  // }, // Add this line
+  //   makeTXVersion: "V0",
+  // };
+
+  // const params = {
+  //   connection,
+  //   poolInfo,
+  //   ownerInfo: {
+  //     feePayer: ownerPublicKey,
+  //     wallet: ownerPublicKey,
+  //     tokenAccounts: tokenAccounts,
+  //     useSOLBalance: true,
+  //   },
+  //   inputMint: inputToken,
+  //   amountIn: new BN(amountIn),
+  //   amountOutMin: new BN(1100),
+  //   priceLimit: undefined,
+  //   remainingAccounts: [],
+  //   associatedOnly: true,
+  //   checkCreateATAOwner: false,
+  //   undefined,
+  //   computeBudgetConfig: undefined, // Add this line
+  //   makeTXVersion: "V0",
+  // };
+
+  const tokenAccounts = (await getWalletTokenAccount(connection, owner)).filter(
+    (account: any) => {
+      return (
+        account.accountInfo.mint.equals(inputToken.mint) ||
+        account.accountInfo.mint.equals(outputToken.mint)
+      );
+    }
+  );
+  console.log(inputTokenAmount, minAmountOut);
+  const it = convertFromSmallestUnit(
+    inputTokenAmount.raw,
+    mintInfoInput.decimals
+  );
+  const ot = convertFromSmallestUnit(
+    minAmountOut.amount.raw,
+    mintInfoOutput.decimals
+  );
+  console.log("it, ot", it, ot, TxVersion.V0);
+  const params = {
+    connection,
+    poolInfo: poolInfo,
+    ownerInfo: {
+      feePayer: owner,
+      wallet: owner,
+      tokenAccounts: [],
+    },
+    inputMint: inputTokenAmount.token.mint,
+    amountIn: it,
+    amountOutMin: ot,
+    remainingAccounts: remainingAccounts,
+    makeTxVersion: "V0",
+  };
+  console.log("inputToken", inputTokenAmount.raw.toString());
+  console.log("params", params);
+  const { innerTransactions } = await Clmm.makeSwapBaseInInstructionSimple(
+    params
+  );
+  console.log(innerTransactions);
+  // const recentBlockhashForSwap = await connection.getLatestBlockhash();
+  // const instructions =
+  //   swapTransaction.innerTransactions[0].instructions.filter(Boolean);
+
+  // if (useVersionedTransaction) {
+  //   const versionedTransaction = new VersionedTransaction(
+  //     new TransactionMessage({
+  //       payerKey: owner,
+  //       recentBlockhash: recentBlockhashForSwap.blockhash,
+  //       instructions: instructions,
+  //     }).compileToV0Message()
+  //   );
+
+  //   return versionedTransaction;
+  // }
+
+  // const legacyTransaction = new Transaction({
+  //   blockhash: recentBlockhashForSwap.blockhash,
+  //   lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
+  //   feePayer: owner,
+  // });
+
+  // legacyTransaction.add(...instructions);
+
+  // return legacyTransaction;
+
+  return await buildAndSendTx(connection, owner, innerTransactions);
+}
 
 export const getTokenAccountsByOwner = async (
   connection: Connection,
@@ -42,390 +468,4 @@ export const getTokenAccountsByOwner = async (
     programId: token.account.owner,
     accountInfo: SPL_ACCOUNT_LAYOUT.decode(token.account.data),
   }));
-};
-
-export const getDecimalFromMintAddress = async (mintAddress: PublicKey) => {
-  const token = new Token(TOKEN_PROGRAM_ID, mintAddress, 0);
-  const mintInfo = await token.getMintInfo();
-  const decimals = mintInfo.decimals;
-  return decimals;
-};
-
-export const getPoolKeys = async () => {
-  const liquidityJsonResp = await fetch(
-    "https://api.raydium.io/v2/sdk/liquidity/mainnet.json"
-  );
-  if (!liquidityJsonResp.ok)
-    throw new Error("Cannot get liquidity pool response");
-  const liquidityJson = (await liquidityJsonResp.json()) as {
-    official: any;
-    unOfficial: any;
-  };
-  const allPoolKeysJson = [
-    ...(liquidityJson?.official ?? []),
-    ...(liquidityJson?.unOfficial ?? []),
-  ];
-
-  return allPoolKeysJson;
-};
-
-export const findPoolInfoForTokens = (
-  mintA: string,
-  mintB: string,
-  allPoolKeysJson: any
-) => {
-  const poolData = allPoolKeysJson.find(
-    (pool: any) =>
-      (pool.baseMint === mintA && pool.quoteMint === mintB) ||
-      (pool.baseMint === mintB && pool.quoteMint === mintA)
-  );
-
-  if (!poolData) return null;
-
-  return jsonInfo2PoolKeys(poolData) as LiquidityPoolKeys;
-};
-
-export const getPoolKeysV3 = async (connection: Connection) => {
-  const poolPublicKey = new PublicKey(
-    "VUx83xFX3LhmrhbFWxAtTdAuQKuEJk1r2qq1edj7d6p"
-  );
-
-  // Get the account info
-  const accountInfo = await connection.getAccountInfo(poolPublicKey);
-
-  if (!accountInfo) {
-    throw new Error("Pool account not found");
-  }
-
-  // Decode the account data
-  const poolInfo = PoolInfoLayout.decode(accountInfo.data);
-  console.log("v3 poolInfo", poolInfo);
-  // Extract necessary fields from poolInfo
-  const liquidityPoolKeys: LiquidityPoolKeys = {
-    id: poolPublicKey,
-    bump: poolInfo.bump,
-    ammConfig: new PublicKey(poolInfo.ammConfig),
-    creator: new PublicKey(poolInfo.creator),
-    mintA: new PublicKey(poolInfo.mintA),
-    mintB: new PublicKey(poolInfo.mintB),
-    vaultA: new PublicKey(poolInfo.vaultA),
-    vaultB: new PublicKey(poolInfo.vaultB),
-    observationId: new PublicKey(poolInfo.observationId),
-    mintDecimalsA: poolInfo.mintDecimalsA,
-    mintDecimalsB: poolInfo.mintDecimalsB,
-    tickSpacing: poolInfo.tickSpacing,
-    liquidity: new BN(poolInfo.liquidity),
-    sqrtPriceX64: new BN(poolInfo.sqrtPriceX64),
-    tickCurrent: poolInfo.tickCurrent,
-    observationIndex: poolInfo.observationIndex,
-    observationUpdateDuration: poolInfo.observationUpdateDuration,
-    feeGrowthGlobalX64A: new BN(poolInfo.feeGrowthGlobalX64A),
-    feeGrowthGlobalX64B: new BN(poolInfo.feeGrowthGlobalX64B),
-    protocolFeesTokenA: new BN(poolInfo.protocolFeesTokenA),
-    protocolFeesTokenB: new BN(poolInfo.protocolFeesTokenB),
-    swapInAmountTokenA: new BN(poolInfo.swapInAmountTokenA),
-    swapOutAmountTokenB: new BN(poolInfo.swapOutAmountTokenB),
-    swapInAmountTokenB: new BN(poolInfo.swapInAmountTokenB),
-    swapOutAmountTokenA: new BN(poolInfo.swapOutAmountTokenA),
-    status: poolInfo.status,
-    rewardInfos: poolInfo.rewardInfos.map((info: any) => ({
-      emissionsPerSecondX64: new BN(info.emissionsPerSecondX64),
-      growthGlobalX64: new BN(info.rewardGrowthGlobalX64),
-      rewardVault: new PublicKey(info.tokenVault),
-      authority: new PublicKey(info.tokenMint),
-    })),
-    tickArrayBitmap: poolInfo.tickArrayBitmap.map(
-      (bitmap: any) => new BN(bitmap)
-    ),
-    totalFeesTokenA: new BN(poolInfo.totalFeesTokenA),
-    totalFeesClaimedTokenA: new BN(poolInfo.totalFeesClaimedTokenA),
-    totalFeesTokenB: new BN(poolInfo.totalFeesTokenB),
-    totalFeesClaimedTokenB: new BN(poolInfo.totalFeesClaimedTokenB),
-    fundFeesTokenA: new BN(poolInfo.fundFeesTokenA),
-    fundFeesTokenB: new BN(poolInfo.fundFeesTokenB),
-    startTime: new BN(poolInfo.startTime),
-    programId: poolPublicKey,
-  };
-
-  console.log("v3", liquidityPoolKeys);
-  return liquidityPoolKeys;
-};
-
-const getProgramAccounts = async (
-  connection: Connection,
-  baseMint: string,
-  quoteMint: string
-): Promise<GetProgramAccountsResponse> => {
-  const layout = LIQUIDITY_STATE_LAYOUT_V4;
-  const programId = new PublicKey(RAYDIUM_V4_PROGRAM_ID);
-  console.log(layout.offsetOf("quoteMint"), layout.offsetOf("baseMint"));
-  const quoteMintIsBaseMintAccounts = await connection.getProgramAccounts(
-    programId,
-    {
-      filters: [
-        {
-          memcmp: {
-            offset: layout.offsetOf("baseMint"),
-            bytes: new PublicKey(baseMint).toBase58(),
-          },
-        },
-        {
-          memcmp: {
-            offset: layout.offsetOf("quoteMint"),
-            bytes: new PublicKey(quoteMint).toBase58(),
-          },
-        },
-      ],
-    }
-  );
-
-  const baseMintIsBaseMintAccounts = await connection.getProgramAccounts(
-    programId,
-    {
-      filters: [
-        {
-          memcmp: {
-            offset: layout.offsetOf("quoteMint"),
-            bytes: new PublicKey(baseMint).toBase58(),
-          },
-        },
-        {
-          memcmp: {
-            offset: layout.offsetOf("baseMint"),
-            bytes: new PublicKey(quoteMint).toBase58(),
-          },
-        },
-      ],
-    }
-  );
-
-  const combinedAccounts = [...quoteMintIsBaseMintAccounts];
-  console.log("result", combinedAccounts);
-  baseMintIsBaseMintAccounts.forEach((account) => {
-    if (!combinedAccounts.some((acc) => acc.pubkey.equals(account.pubkey))) {
-      combinedAccounts.push(account);
-    }
-  });
-
-  return combinedAccounts;
-};
-
-const getProgramsAccounts = async (
-  connection: Connection,
-  baseMint: string,
-  quoteMint: string
-) => {
-  const response = await Promise.all([
-    getProgramAccounts(connection, baseMint, quoteMint),
-    getProgramAccounts(connection, quoteMint, baseMint),
-  ]);
-
-  return response.filter((r) => r.length > 0)[0] || [];
-};
-
-export const getPoolKeysV2 = async (
-  connection: Connection,
-  baseMint: string,
-  quoteMint: string
-): Promise<LiquidityPoolKeys | undefined> => {
-  const layout = LIQUIDITY_STATE_LAYOUT_V4;
-
-  const programData = await getProgramsAccounts(
-    connection,
-    baseMint,
-    quoteMint
-  );
-  console.log("programData", programData);
-  const collectedPoolResults = programData
-    .map((info: any) => ({
-      id: new PublicKey(info.pubkey),
-      version: 4,
-      programId: new PublicKey(RAYDIUM_V4_PROGRAM_ID),
-      ...layout.decode(info.account.data),
-    }))
-    .flat();
-
-  const pool = collectedPoolResults[0];
-  if (!pool) return null;
-
-  const market = await connection
-    .getAccountInfo(pool.marketId)
-    .then((item: any) => ({
-      programId: item.owner,
-      ...MARKET_STATE_LAYOUT_V3.decode(item.data),
-    }));
-
-  const authority = Liquidity.getAssociatedAuthority({
-    programId: new PublicKey(RAYDIUM_V4_PROGRAM_ID),
-  }).publicKey;
-
-  const marketProgramId = market.programId;
-
-  const poolKeys = {
-    id: pool.id,
-    baseMint: pool.baseMint,
-    quoteMint: pool.quoteMint,
-    lpMint: pool.lpMint,
-    baseDecimals: Number.parseInt(pool.baseDecimal.toString()),
-    quoteDecimals: Number.parseInt(pool.quoteDecimal.toString()),
-    lpDecimals: Number.parseInt(pool.baseDecimal.toString()),
-    version: pool.version,
-    programId: pool.programId,
-    openOrders: pool.openOrders,
-    targetOrders: pool.targetOrders,
-    baseVault: pool.baseVault,
-    quoteVault: pool.quoteVault,
-    marketVersion: 3,
-    authority: authority,
-    marketProgramId,
-    marketId: market.ownAddress,
-    marketAuthority: Market.getAssociatedAuthority({
-      programId: marketProgramId,
-      marketId: market.ownAddress,
-    }).publicKey,
-    marketBaseVault: market.baseVault,
-    marketQuoteVault: market.quoteVault,
-    marketBids: market.bids,
-    marketAsks: market.asks,
-    marketEventQueue: market.eventQueue,
-    withdrawQueue: pool.withdrawQueue,
-    lpVault: pool.lpVault,
-    lookupTableAccount: PublicKey.default,
-  } as LiquidityPoolKeys;
-  return poolKeys;
-};
-
-export const getSwapTransaction = async (
-  connection: Connection,
-  owner: PublicKey,
-  amount: number,
-  poolKeys: LiquidityPoolKeys,
-  maxLamports: number = 100000,
-  useVersionedTransaction = true,
-  fixedSide: "in" | "out" = "in",
-  slippage: number = 5
-): Promise<Transaction | VersionedTransaction> => {
-  const { minAmountOut, amountIn } = await calcAmountOut(
-    connection,
-    poolKeys,
-    amount,
-    slippage,
-    fixedSide === "in"
-  );
-
-  const userTokenAccounts = await getTokenAccountsByOwner(connection, owner);
-  const swapTransaction = await Liquidity.makeSwapInstructionSimple({
-    connection: connection,
-    makeTxVersion: useVersionedTransaction ? 0 : 1,
-    poolKeys: {
-      ...poolKeys,
-    },
-    userKeys: {
-      tokenAccounts: userTokenAccounts,
-      owner: owner,
-    },
-    amountIn: amountIn,
-    amountOut: minAmountOut,
-    fixedSide: fixedSide,
-    config: {
-      bypassAssociatedCheck: false,
-    },
-    computeBudgetConfig: {
-      microLamports: maxLamports,
-    },
-  });
-
-  const recentBlockhashForSwap = await connection.getLatestBlockhash();
-  const instructions =
-    swapTransaction.innerTransactions[0].instructions.filter(Boolean);
-
-  if (useVersionedTransaction) {
-    const versionedTransaction = new VersionedTransaction(
-      new TransactionMessage({
-        payerKey: owner,
-        recentBlockhash: recentBlockhashForSwap.blockhash,
-        instructions: instructions,
-      }).compileToV0Message()
-    );
-
-    return versionedTransaction;
-  }
-
-  const legacyTransaction = new Transaction({
-    blockhash: recentBlockhashForSwap.blockhash,
-    lastValidBlockHeight: recentBlockhashForSwap.lastValidBlockHeight,
-    feePayer: owner,
-  });
-
-  legacyTransaction.add(...instructions);
-
-  return legacyTransaction;
-};
-
-export const calcAmountOut = async (
-  connection: Connection,
-  poolKeys: LiquidityPoolKeys,
-  rawAmountIn: number,
-  slippage: number = 5,
-  swapInDirection: boolean = true
-) => {
-  swapInDirection = !swapInDirection;
-  const poolInfo = await Liquidity.fetchInfo({
-    connection: connection,
-    poolKeys,
-  });
-
-  let currencyInMint = poolKeys.baseMint;
-  let currencyInDecimals = poolInfo.baseDecimals;
-  let currencyOutMint = poolKeys.quoteMint;
-  let currencyOutDecimals = poolInfo.quoteDecimals;
-
-  if (!swapInDirection) {
-    currencyInMint = poolKeys.quoteMint;
-    currencyInDecimals = poolInfo.quoteDecimals;
-    currencyOutMint = poolKeys.baseMint;
-    currencyOutDecimals = poolInfo.baseDecimals;
-  }
-
-  const currencyIn = new Token(
-    TOKEN_PROGRAM_ID,
-    currencyInMint,
-    currencyInDecimals
-  );
-  const amountIn = new TokenAmount(
-    currencyIn,
-    rawAmountIn.toFixed(currencyInDecimals),
-    false
-  );
-  const currencyOut = new Token(
-    TOKEN_PROGRAM_ID,
-    currencyOutMint,
-    currencyOutDecimals
-  );
-  const slippageX = new Percent(slippage, 100); // 5% slippage
-
-  const {
-    amountOut,
-    minAmountOut,
-    currentPrice,
-    executionPrice,
-    priceImpact,
-    fee,
-  } = Liquidity.computeAmountOut({
-    poolKeys,
-    poolInfo,
-    amountIn,
-    currencyOut,
-    slippage: slippageX,
-  });
-
-  return {
-    amountIn,
-    amountOut,
-    minAmountOut,
-    currentPrice,
-    executionPrice,
-    priceImpact,
-    fee,
-  };
 };

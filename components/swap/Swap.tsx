@@ -27,15 +27,12 @@ import {
   PoolInfoLayout,
   MARKET_STATE_LAYOUT_V3,
   Market,
+  ClmmPoolInfo,
 } from "@raydium-io/raydium-sdk";
 import {
-  calcAmountOut,
-  findPoolInfoForTokens,
-  getDecimalFromMintAddress,
-  getPoolKeys,
-  getPoolKeysV2,
-  getPoolKeysV3,
-  getSwapTransaction,
+  createSwap,
+  estimateOutputAmount,
+  fetchPoolInfo,
   getTokenAccountsByOwner,
 } from "@/lib/swap-utils";
 
@@ -148,7 +145,7 @@ const InputSwap = (
 const Swap = () => {
   const { publicKey, sendTransaction, signTransaction } = useWallet();
   const { connection } = useConnection();
-  const [poolKeys, setPoolKeys] = useState<LiquidityPoolKeys>();
+  const [poolKeys, setPoolKeys] = useState<ClmmPoolInfo>();
   const [exchangeRate, setExchangeRate] = useState<string>("");
   const [tokenAccounts, setTokenAccounts] = useState<TokenAccount[]>([]);
 
@@ -167,25 +164,16 @@ const Swap = () => {
     "https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
 
   const handleSwap: MouseEventHandler<HTMLButtonElement> = async () => {
-    console.log("hs", poolKeys);
     if (poolKeys && publicKey && signTransaction && connection) {
       try {
-        const { amountIn, minAmountOut } = await calcAmountOut(
+        const transaction = await createSwap(
           connection,
           poolKeys,
-          valueA || 0,
-          5,
-          isBuying
-        );
-
-        const transaction = await getSwapTransaction(
-          connection,
           publicKey,
+          BASE_MINT_TOKEN,
+          QUOTE_MINT_TOKEN,
           valueA || 0,
-          poolKeys,
-          undefined,
-          undefined,
-          isBuying ? "in" : "out"
+          valueB
         );
 
         const signedTransaction = await signTransaction(transaction);
@@ -199,24 +187,14 @@ const Swap = () => {
   };
 
   React.useEffect(() => {
-    // Get the pool token of our token
-    // getPoolKeys().then((poolKeys) => {
-    //   findPoolInfoForTokens(BASE_MINT_TOKEN, QUOTE_MINT_TOKEN, poolKeys);
-    //   setPoolKeys(
-    //     findPoolInfoForTokens(BASE_MINT_TOKEN, QUOTE_MINT_TOKEN, poolKeys)
-    //   );
-    // });
-
-    getPoolKeysV3(connection).then((poolKeys: LiquidityPoolKeys) => {
-      setPoolKeys(poolKeys);
-    });
-    // getPoolKeysV2(connection, BASE_MINT_TOKEN, QUOTE_MINT_TOKEN).then(
-    //   (poolKeys: any) => {
-    //     setPoolKeys(poolKeys);
-    //   }
-    // );
-
     if (!publicKey) return;
+
+    // Get the pool token of our token
+    fetchPoolInfo(connection, publicKey).then((poolInfo: ClmmPoolInfo) => {
+      console.log("poolKeys", poolInfo);
+      setPoolKeys(poolInfo);
+    });
+
     // Get solana balance
     connection.getBalance(publicKey).then((balance) => {
       const realBalance = balance / LAMPORTS_PER_SOL;
@@ -227,7 +205,6 @@ const Swap = () => {
       }
     });
 
-    // Get the quote token balance
     getTokenAccountsByOwner(connection, publicKey).then(async (tokens) => {
       const mintAddress = new PublicKey(QUOTE_MINT_TOKEN);
       const quoteToken = tokens.filter((token) =>
@@ -247,38 +224,17 @@ const Swap = () => {
   }, [publicKey, connection, isBuying]);
 
   React.useEffect(() => {
-    // get Rate to calcul estimated output
-    const getRate = async () => {
-      if (poolKeys && publicKey && connection) {
-        try {
-          const { executionPrice } = await calcAmountOut(
-            connection,
-            poolKeys,
-            valueA || 0,
-            5,
-            isBuying
-          );
-          if (executionPrice.denominator.isZero()) return;
-          const rate = executionPrice?.toFixed() || "0";
-          setExchangeRate(rate);
-        } catch (err: any) {
-          console.error("error at getRate", err);
-        }
-      }
-    };
-    getRate();
-  }, [publicKey, poolKeys, isBuying]);
-
-  React.useEffect(() => {
     // update estimated output
-    if (exchangeRate) {
-      const calculatedOutput: number = (valueA || 0) * parseFloat(exchangeRate);
-      const processedOutput: string = isNaN(calculatedOutput)
-        ? "0"
-        : String(calculatedOutput);
-      setValueB(Number(processedOutput));
+
+    if (poolKeys) {
+      const calculatedOutput: number = estimateOutputAmount(
+        valueA || 0,
+        poolKeys,
+        isBuying
+      );
+      setValueB(calculatedOutput);
     }
-  }, [exchangeRate, valueA]);
+  }, [valueA]);
 
   return (
     <>
