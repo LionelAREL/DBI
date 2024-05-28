@@ -6,20 +6,19 @@ import Tokenomics from "@/components/tokenomics/Tokenomics";
 import { useMemo } from "react";
 import {
   PhantomWalletAdapter,
-  SolflareWalletAdapter,
+  LedgerWalletAdapter,
   TorusWalletAdapter,
+  SolflareWalletAdapter,
+  TrustWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
 import {
   ConnectionProvider,
   WalletProvider,
 } from "@solana/wallet-adapter-react";
 import { WalletAdapterNetwork } from "@solana/wallet-adapter-base";
-import { UnsafeBurnerWalletAdapter } from "@solana/wallet-adapter-wallets";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-import { clusterApiUrl } from "@solana/web3.js";
 import SwapSection from "@/components/swap/SwapSection";
 import LogoCaroussel from "@/components/LogoCaroussel";
-import Section from "@/components/Section";
 
 export default function HomePage() {
   const network = WalletAdapterNetwork.Mainnet;
@@ -27,7 +26,7 @@ export default function HomePage() {
   // You can also provide a custom RPC endpoint.
   const endpoint = useMemo(
     () =>
-      "https://solana-mainnet.g.alchemy.com/v2/6e49viiueAByo0eEr2h2ZF8TgnQbqcxf",
+      "https://fluent-capable-pine.solana-mainnet.quiknode.pro/cf8418326e14b4fdf699af6fbb89e139408f7f84/",
     [network]
   );
 
@@ -46,6 +45,10 @@ export default function HomePage() {
        * in the npm package `@solana/wallet-adapter-wallets`.
        */
       new PhantomWalletAdapter(),
+      new LedgerWalletAdapter(),
+      new SolflareWalletAdapter(),
+      new TorusWalletAdapter(),
+      new TrustWalletAdapter(),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [network]
@@ -55,7 +58,7 @@ export default function HomePage() {
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
-          <main className="scroll-smooth">
+          <main className="scroll-smooth min-w-[700px]">
             <Header />
             <Home />
             <SwapSection />

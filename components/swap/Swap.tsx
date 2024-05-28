@@ -29,10 +29,14 @@ import {
   Market,
   ClmmPoolInfo,
 } from "@raydium-io/raydium-sdk";
+import Modal from "@mui/material/Modal";
 import {
-  createSwap,
+  BASE_MINT_TOKEN,
+  QUOTE_MINT_TOKEN,
+  createInstruction,
   estimateOutputAmount,
   fetchPoolInfo,
+  getPoolInfo,
   getTokenAccountsByOwner,
 } from "@/lib/swap-utils";
 
@@ -83,7 +87,7 @@ const InputSwap = (
   };
 
   return (
-    <div className={`${props?.className || ""} rounded-md px-2 py-2`}>
+    <div className={`${props?.className || ""} rounded-md px-2 py-2 min-w-max`}>
       <div className="flex flex-row justify-between py-1">
         <label className="text-sm text-white">
           {props.isInput ? "From" : "To"}
@@ -157,32 +161,37 @@ const Swap = () => {
   const [valueA, setValueA] = React.useState<number | null>();
   const [valueB, setValueB] = React.useState<number>(0);
 
-  // const SOL_TOKEN_ADDRESSE = "";
-  const BASE_MINT_TOKEN = "So11111111111111111111111111111111111111112";
-  const QUOTE_MINT_TOKEN = "J2yWgVXwq2EzCnmac4irUmDctcSg7aoDAj7KfxH4zMyM";
+  const [open, setOpen] = React.useState<boolean>(false);
+  const [loading, setLoading] = React.useState<boolean>(false);
+  const handleOpen = () => setOpen(true);
+  const handleClose = () => setOpen(false);
+
   const RAYDIUM_LIQUIDITY_JSON =
     "https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
 
   const handleSwap: MouseEventHandler<HTMLButtonElement> = async () => {
     if (poolKeys && publicKey && signTransaction && connection) {
+      setLoading(true);
       try {
-        const transaction = await createSwap(
+        const transaction = await createInstruction(
           connection,
-          poolKeys,
           publicKey,
-          BASE_MINT_TOKEN,
-          QUOTE_MINT_TOKEN,
-          valueA || 0,
-          valueB
+          poolKeys,
+          isBuying ? BASE_MINT_TOKEN : QUOTE_MINT_TOKEN,
+          isBuying ? QUOTE_MINT_TOKEN : BASE_MINT_TOKEN,
+          valueA || 0
         );
 
         const signedTransaction = await signTransaction(transaction);
         const txid = await sendTransaction(signedTransaction, connection, {
           skipPreflight: true,
         });
+        setLoading(true);
       } catch (err: any) {
         console.error("tx failed => ", err);
       }
+      setLoading(false);
+      setOpen(false);
     }
   };
 
@@ -190,7 +199,7 @@ const Swap = () => {
     if (!publicKey) return;
 
     // Get the pool token of our token
-    fetchPoolInfo(connection, publicKey).then((poolInfo: ClmmPoolInfo) => {
+    getPoolInfo(connection, publicKey).then((poolInfo: ClmmPoolInfo) => {
       console.log("poolKeys", poolInfo);
       setPoolKeys(poolInfo);
     });
@@ -238,7 +247,7 @@ const Swap = () => {
 
   return (
     <>
-      <div className="bg-red-200 w-6/12 ms-auto me-auto rounded-md p-2">
+      <div className="bg-red-200 w-6/12 ms-auto me-auto rounded-md p-2 min-w-max">
         {/* <div className="flex flex-row justify-end py-1">
           <IoSettingsSharp className="w-6 h-6" />
         </div> */}
@@ -275,13 +284,40 @@ const Swap = () => {
           />
         </div>
         <Button
-          disabled={valueA === 0}
-          onClick={handleSwap}
+          disabled={(valueA || 0) === 0 || !publicKey}
+          onClick={handleOpen}
           className="mt-1 w-full inline-flex h-10 items-center justify-center rounded-md bg-[#C62828] px-6 text-sm font-medium text-white shadow transition-colors hover:bg-[#B71C1C] focus:outline-none focus:ring-2 focus:ring-[#C62828] focus:ring-offset-2"
         >
-          Do not swap
+          {publicKey ? "Do not swap" : "Connect your wallet"}
         </Button>
       </div>
+      <Modal open={open} onClose={handleClose}>
+        <div className="absolute left-1/2 top-1/2 bg-red-300 rounded-xl p-8 transform -translate-x-1/2 -translate-y-1/2">
+          <p className="text-center text-white text-3xl font-bold">
+            {loading ? "No pls no !" : "Are you sure ?"}
+          </p>
+          <div className="flex flex-row justify-between gap-2">
+            <Button onClick={handleSwap} className="py-0">
+              {loading ? (
+                <div className="flex justify-center gap-2">
+                  {["1", "2", "4"].map((key) => {
+                    return (
+                      <div
+                        key={key}
+                        className={`w-3 h-3 rounded-full bg-red-300 opacity-100 animate-bounce`}
+                        style={{ animationDelay: `0.${key}s` }}
+                      ></div>
+                    );
+                  })}
+                </div>
+              ) : (
+                "Yes but do not buy it"
+              )}
+            </Button>
+            <Button onClick={handleClose}>No</Button>
+          </div>
+        </div>
+      </Modal>
     </>
   );
 };

@@ -5,9 +5,9 @@ import Title from "../Title";
 
 const Tokenomics = () => {
   const data = [
-    { value: 10, label: "series A" },
-    { value: 15, label: "series B" },
-    { value: 20, label: "series C" },
+    { value: 20000000, label: "Liquidity Pool" },
+    { value: 500000000, label: "Creator (me)" },
+    { value: 480000000, label: "Futur airdrop" },
   ];
 
   const options = {
@@ -29,8 +29,11 @@ const Tokenomics = () => {
   return (
     <Section id="tokenomics" classNameSection="bg-[#E53935]">
       <Title className="text-center">Tokenomic</Title>
-      <div className="flex flex-col items-center gap-6">
-        <p>The tokenomic is bad as fuck, so please do not buy it !</p>
+      <div className="flex flex-col items-center gap-6 text-lg">
+        <p>
+          The tokenomic is bad as fuck, so{" "}
+          <span className="font-bold">PLEASE DO NOT BUY IT !</span>
+        </p>
         <PieChart
           series={[
             {

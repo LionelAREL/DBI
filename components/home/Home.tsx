@@ -16,12 +16,12 @@ const Home = () => {
     >
       <div>
         <Title>
-          It's not a revolutionize crypto, <br />
-          so DO NOT BUY IT
+          It's not a revolutionary crypto, <br />
+          so DO NOT BUY IT.
         </Title>
         <p className="text-gray-200 md:text-xl">
-          Seamlessly a meme coin token on Solana, it's like thousand other meme
-          token so do not buy it
+          Seamlessly a meme coin token on Solana, it's like thousands of other
+          meme tokens, so do not buy it.
         </p>
         <Button
           asChild
